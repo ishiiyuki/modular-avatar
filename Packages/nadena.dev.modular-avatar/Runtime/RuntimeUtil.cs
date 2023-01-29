@@ -33,11 +33,7 @@ using System.Reflection;
 
 namespace nadena.dev.modular_avatar.core
 {
-    /**
-     * This class is public for the benefit of the Editor namespace classes, but is not a stable API and may change
-     * on patch releases.
-     */
-    public static class RuntimeUtil
+    internal static class RuntimeUtil
     {
         // Initialized in Util
         public static Action<Action> delayCall = (_) => { };
@@ -49,7 +45,7 @@ namespace nadena.dev.modular_avatar.core
             Start
         }
 
-        public delegate void OnDemandProcessAvatarDelegate(OnDemandSource source, AvatarTagComponent component);
+        public delegate void OnDemandProcessAvatarDelegate(OnDemandSource source, MonoBehaviour component);
 
         public static OnDemandProcessAvatarDelegate OnDemandProcessAvatar = (_m, _c) => { };
 

@@ -23,6 +23,8 @@
  */
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using JetBrains.Annotations;
 using UnityEditor;
@@ -56,23 +58,6 @@ namespace nadena.dev.modular_avatar.core.editor
             RuntimeUtil.delayCall = (cb) => EditorApplication.delayCall += cb.Invoke;
 
             EditorApplication.hierarchyChanged += () => { RuntimeUtil.InvokeHierarchyChanged(); };
-        }
-
-        public static AnimatorController CreateAnimator(AnimatorController toClone = null)
-        {
-            AnimatorController controller;
-            if (toClone != null)
-            {
-                controller = Object.Instantiate(toClone);
-            }
-            else
-            {
-                controller = new AnimatorController();
-            }
-
-            AssetDatabase.CreateAsset(controller, GenerateAssetPath());
-
-            return controller;
         }
 
         public static string GenerateAssetPath()
@@ -111,20 +96,6 @@ namespace nadena.dev.modular_avatar.core.editor
             };
         }
 
-        public static AnimatorController DeepCloneAnimator(AnimatorController controller)
-        {
-            var merger = new AnimatorCombiner();
-            merger.AddController("", controller, null);
-            return merger.Finish();
-        }
-
-        public static AnimatorController ConvertAnimatorController(AnimatorOverrideController overrideController) 
-        {
-            var merger = new AnimatorCombiner();
-            merger.AddOverrideController("", overrideController, null);
-            return merger.Finish();
-        }
-
         public static bool IsTemporaryAsset(Object obj)
         {
             var path = AssetDatabase.GetAssetPath(obj);
@@ -149,30 +120,69 @@ namespace nadena.dev.modular_avatar.core.editor
 
         private const int MAX_EXPRESSION_TEXTURE_SIZE = 256;
 
-        public enum ValidateExpressionMenuIconResult 
+        public enum ValidateExpressionMenuIconResult
         {
             Success,
             TooLarge,
             Uncompressed
         }
 
-        public static ValidateExpressionMenuIconResult ValidateExpressionMenuIcon(Texture2D icon) 
+        public static ValidateExpressionMenuIconResult ValidateExpressionMenuIcon(Texture2D icon)
         {
             string path = AssetDatabase.GetAssetPath(icon);
             TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
             if (importer == null) return ValidateExpressionMenuIconResult.Success;
             TextureImporterPlatformSettings settings = importer.GetDefaultPlatformTextureSettings();
-            
+
             // Max texture size;
             if ((icon.width > MAX_EXPRESSION_TEXTURE_SIZE || icon.height > MAX_EXPRESSION_TEXTURE_SIZE) &&
                 settings.maxTextureSize > MAX_EXPRESSION_TEXTURE_SIZE) return ValidateExpressionMenuIconResult.TooLarge;
-            
+
             // Compression
-            if (settings.textureCompression == TextureImporterCompression.Uncompressed) return ValidateExpressionMenuIconResult.Uncompressed;
+            if (settings.textureCompression == TextureImporterCompression.Uncompressed)
+                return ValidateExpressionMenuIconResult.Uncompressed;
             return ValidateExpressionMenuIconResult.Success;
         }
-        
-        
-        
+
+        internal static IEnumerable<AnimatorState> States(AnimatorController ac)
+        {
+            HashSet<AnimatorStateMachine> visitedStateMachines = new HashSet<AnimatorStateMachine>();
+            Queue<AnimatorStateMachine> pending = new Queue<AnimatorStateMachine>();
+
+            foreach (var layer in ac.layers)
+            {
+                if (layer.stateMachine != null) pending.Enqueue(layer.stateMachine);
+            }
+
+            while (pending.Count > 0)
+            {
+                var next = pending.Dequeue();
+                if (visitedStateMachines.Contains(next)) continue;
+                visitedStateMachines.Add(next);
+
+                foreach (var child in next.stateMachines)
+                {
+                    if (child.stateMachine != null) pending.Enqueue(child.stateMachine);
+                }
+
+                foreach (var state in next.states)
+                {
+                    yield return state.state;
+                }
+            }
+        }
+
+        internal static bool IsProxyAnimation(Motion m)
+        {
+            var path = AssetDatabase.GetAssetPath(m);
+
+            // This is a fairly wide condition in order to deal with:
+            // 1. Future additions of proxy animations (so GUIDs are out)
+            // 2. Unitypackage based installations of the VRCSDK
+            // 3. VCC based installations of the VRCSDK
+            // 4. Very old VCC based installations of the VRCSDK where proxy animations were copied into Assets
+            return path.Contains("/AV3 Demo Assets/Animation/ProxyAnim/proxy")
+                   || path.Contains("/VRCSDK/Examples3/Animation/ProxyAnim/proxy");
+        }
     }
 }

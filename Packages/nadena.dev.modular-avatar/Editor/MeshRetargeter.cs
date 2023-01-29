@@ -44,8 +44,9 @@ namespace nadena.dev.modular_avatar.core.editor
             IsRetargetable[bone] = true;
         }
 
-        internal static void MarkNonRetargetable(Transform bone)
+        internal static void RetainMergedBone(Transform bone)
         {
+            if (bone == null) return;
             if (IsRetargetable.ContainsKey(bone)) IsRetargetable[bone] = false;
         }
 
@@ -76,10 +77,16 @@ namespace nadena.dev.modular_avatar.core.editor
 
     internal class RetargetMeshes
     {
-        internal void OnPreprocessAvatar(GameObject avatarGameObject)
+        private BuildContext _context;
+
+        internal void OnPreprocessAvatar(GameObject avatarGameObject, BuildContext context)
         {
+            _context = context;
+
             foreach (var renderer in avatarGameObject.GetComponentsInChildren<SkinnedMeshRenderer>(true))
             {
+                if (renderer.sharedMesh == null) continue;
+
                 bool isRetargetable = false;
                 foreach (var bone in renderer.bones)
                 {
@@ -92,7 +99,8 @@ namespace nadena.dev.modular_avatar.core.editor
 
                 if (isRetargetable)
                 {
-                    new MeshRetargeter(renderer).Retarget();
+                    var newMesh = new MeshRetargeter(renderer).Retarget();
+                    _context.SaveAsset(newMesh);
                 }
             }
 
@@ -117,6 +125,7 @@ namespace nadena.dev.modular_avatar.core.editor
                         child.SetParent(destBone, true);
                     }
 
+                    PathMappings.MarkRemoved(sourceBone.gameObject);
                     UnityEngine.Object.DestroyImmediate(sourceBone.gameObject);
                 }
             }
@@ -132,19 +141,12 @@ namespace nadena.dev.modular_avatar.core.editor
         private readonly SkinnedMeshRenderer renderer;
         private Mesh src, dst;
 
-        struct BindInfo
-        {
-            public Matrix4x4 priorLocalToBone;
-            public Matrix4x4 localToBone;
-            public Matrix4x4 priorToNew;
-        }
-
         public MeshRetargeter(SkinnedMeshRenderer renderer)
         {
             this.renderer = renderer;
         }
 
-        public void Retarget()
+        public Mesh Retarget()
         {
             var avatar = RuntimeUtil.FindAvatarInParents(renderer.transform);
             if (avatar == null) throw new System.Exception("Could not find avatar in parents of " + renderer.name);
@@ -169,7 +171,7 @@ namespace nadena.dev.modular_avatar.core.editor
             avatarTransform.rotation = avRot;
             avatarTransform.localScale = avScale;
 
-            AssetDatabase.CreateAsset(dst, Util.GenerateAssetPath());
+            return dst;
         }
 
         private void AdjustShapeKeys()

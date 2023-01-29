@@ -16,7 +16,7 @@ namespace nadena.dev.modular_avatar.core.editor
      */
     internal class BlendshapeSyncAnimationProcessor
     {
-        private Object _container;
+        private BuildContext _context;
         private Dictionary<Motion, Motion> _motionCache;
         private Dictionary<SummaryBinding, List<SummaryBinding>> _bindingMappings;
 
@@ -43,8 +43,11 @@ namespace nadena.dev.modular_avatar.core.editor
             }
         }
 
-        public void OnPreprocessAvatar(GameObject avatar)
+        public void OnPreprocessAvatar(GameObject avatar, BuildContext context)
         {
+            _context = context;
+            var animDb = _context.AnimationDatabase;
+
             var avatarDescriptor = avatar.GetComponent<VRCAvatarDescriptor>();
             _bindingMappings = new Dictionary<SummaryBinding, List<SummaryBinding>>();
             _motionCache = new Dictionary<Motion, Motion>();
@@ -94,25 +97,22 @@ namespace nadena.dev.modular_avatar.core.editor
                         _bindingMappings[srcBinding] = dstBindings;
                     }
 
-                    dstBindings.Add(new SummaryBinding(targetObj, binding.Blendshape));
+                    var targetBlendshapeName = string.IsNullOrWhiteSpace(binding.LocalBlendshape)
+                        ? binding.Blendshape
+                        : binding.LocalBlendshape;
+
+                    dstBindings.Add(new SummaryBinding(targetObj, targetBlendshapeName));
                 }
             }
 
-            // Ensure we have a unique copy of the controller.
-            if (!Util.IsTemporaryAsset(controller))
-            {
-                controller = Util.DeepCloneAnimator(controller);
-                layers[fxIndex].animatorController = controller;
-                avatarDescriptor.baseAnimationLayers = layers;
-            }
-
-            _container = controller;
-
             // Walk and transform all clips
-            foreach (var state in AllStates(controller))
+            animDb.ForeachClip(clip =>
             {
-                state.motion = TransformMotion(state.motion);
-            }
+                if (clip.CurrentClip is AnimationClip anim)
+                {
+                    clip.CurrentClip = TransformMotion(anim);
+                }
+            });
         }
 
         Motion TransformMotion(Motion motion)
@@ -148,7 +148,8 @@ namespace nadena.dev.modular_avatar.core.editor
                     {
                         var newTree = new BlendTree();
                         EditorUtility.CopySerialized(tree, newTree);
-                        AssetDatabase.AddObjectToAsset(newTree, _container);
+                        _context.SaveAsset(newTree);
+
                         newTree.children = children;
                         motion = newTree;
                     }
@@ -179,7 +180,6 @@ namespace nadena.dev.modular_avatar.core.editor
                 if (clip == origClip)
                 {
                     clip = Object.Instantiate(clip);
-                    AssetDatabase.AddObjectToAsset(clip, _container);
                 }
 
                 foreach (var dst in dstBindings)

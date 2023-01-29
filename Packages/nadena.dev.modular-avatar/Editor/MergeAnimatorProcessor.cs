@@ -39,6 +39,8 @@ namespace nadena.dev.modular_avatar.core.editor
 
         private const string SAMPLE_PATH_LEGACY = "Assets/VRCSDK/Examples3/Animation/Controllers";
 
+        private BuildContext _context;
+
         private Dictionary<VRCAvatarDescriptor.AnimLayerType, AnimatorController> defaultControllers_ =
             new Dictionary<VRCAvatarDescriptor.AnimLayerType, AnimatorController>();
 
@@ -48,15 +50,17 @@ namespace nadena.dev.modular_avatar.core.editor
         Dictionary<VRCAvatarDescriptor.AnimLayerType, AnimatorCombiner> mergeSessions =
             new Dictionary<VRCAvatarDescriptor.AnimLayerType, AnimatorCombiner>();
 
-        internal void OnPreprocessAvatar(GameObject avatarGameObject)
+        internal void OnPreprocessAvatar(GameObject avatarGameObject, BuildContext context)
         {
+            _context = context;
+
             defaultControllers_.Clear();
             mergeSessions.Clear();
 
             var descriptor = avatarGameObject.GetComponent<VRCAvatarDescriptor>();
 
-            InitSessions(descriptor.baseAnimationLayers);
-            InitSessions(descriptor.specialAnimationLayers);
+            if (descriptor.baseAnimationLayers != null) InitSessions(descriptor.baseAnimationLayers);
+            if (descriptor.specialAnimationLayers != null) InitSessions(descriptor.specialAnimationLayers);
 
             var toMerge = avatarGameObject.transform.GetComponentsInChildren<ModularAvatarMergeAnimator>(true);
 
@@ -77,7 +81,7 @@ namespace nadena.dev.modular_avatar.core.editor
 
                 if (!mergeSessions.TryGetValue(merge.layerType, out var session))
                 {
-                    session = new AnimatorCombiner();
+                    session = new AnimatorCombiner(context);
                     mergeSessions[merge.layerType] = session;
                     if (defaultControllers_.ContainsKey(merge.layerType))
                     {
@@ -127,6 +131,13 @@ namespace nadena.dev.modular_avatar.core.editor
 
                 defaultControllers_[layer.type] = controller;
                 writeDefaults_[layer.type] = ProbeWriteDefaults(controller);
+                if (!layer.isDefault)
+                {
+                    // For non-default layers, ensure we always clone the controller for the benefit of subsequent
+                    // processing phases
+                    mergeSessions[layer.type] = new AnimatorCombiner(_context);
+                    mergeSessions[layer.type].AddController("", controller, null);
+                }
             }
         }
 

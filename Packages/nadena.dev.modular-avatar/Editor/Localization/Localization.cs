@@ -11,15 +11,18 @@ namespace nadena.dev.modular_avatar.core.editor
 {
     internal static class Localization
     {
+        private const string FallbackLanguage = "en";
+
         private const string localizationPathGuid = "488c994003974b3ab2796371cf627bca";
         private static string localizationPathRoot = AssetDatabase.GUIDToAssetPath(localizationPathGuid);
 
         private static ImmutableDictionary<string, string> SupportedLanguageDisplayNames
             = ImmutableDictionary<string, string>.Empty
                 .Add("en", "English")
-                .Add("ja", "日本語");
+                .Add("ja", "日本語")
+                .Add("zh-hans", "简体中文");
 
-        private static ImmutableList<string> SupportedLanguages = new string[] {"en", "ja"}.ToImmutableList();
+        private static ImmutableList<string> SupportedLanguages = new string[] {"en", "ja", "zh-hans"}.ToImmutableList();
 
         private static string[] DisplayNames = SupportedLanguages.Select(l =>
         {
@@ -28,6 +31,8 @@ namespace nadena.dev.modular_avatar.core.editor
 
         private static Dictionary<string, ImmutableDictionary<string, string>> Cache
             = new Dictionary<string, ImmutableDictionary<string, string>>();
+
+        internal static string OverrideLanguage { get; set; } = null;
 
         [MenuItem("Tools/Modular Avatar/Reload localizations")]
         public static void Reload()
@@ -42,12 +47,26 @@ namespace nadena.dev.modular_avatar.core.editor
                 return info;
             }
 
+            var fallback = lang == FallbackLanguage
+                ? ImmutableDictionary<string, string>.Empty
+                : GetLocalization(FallbackLanguage);
+
             var filename = localizationPathRoot + "/" + lang + ".json";
 
             try
             {
                 var langData = File.ReadAllText(filename);
-                info = JsonConvert.DeserializeObject<Dictionary<string, string>>(langData).ToImmutableDictionary();
+                var tmp = JsonConvert.DeserializeObject<Dictionary<string, string>>(langData);
+
+                foreach (var kvp in fallback)
+                {
+                    if (!tmp.ContainsKey(kvp.Key))
+                    {
+                        tmp[kvp.Key] = kvp.Value;
+                    }
+                }
+
+                info = tmp.ToImmutableDictionary();
                 Cache[lang] = info;
                 return info;
             }
@@ -86,7 +105,7 @@ namespace nadena.dev.modular_avatar.core.editor
 
         public static string GetSelectedLocalization()
         {
-            return EditorPrefs.GetString("nadena.dev.modularavatar.lang", "en");
+            return OverrideLanguage ?? EditorPrefs.GetString("nadena.dev.modularavatar.lang", "en");
         }
 
         public static void ShowLanguageUI()

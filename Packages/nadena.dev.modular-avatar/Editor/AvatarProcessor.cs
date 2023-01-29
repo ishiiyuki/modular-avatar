@@ -26,11 +26,14 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using UnityEditor;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDKBase.Editor.BuildPipeline;
 using Object = UnityEngine.Object;
+
+[assembly: InternalsVisibleTo("Tests")]
 
 namespace nadena.dev.modular_avatar.core.editor
 {
@@ -40,12 +43,18 @@ namespace nadena.dev.modular_avatar.core.editor
         // Place after EditorOnly processing (which runs at -1024) but hopefully before most other user callbacks
         public int callbackOrder => -25;
 
+        /// <summary>
+        /// Avoid recursive activation of avatar processing by suppressing starting processing while processing is
+        /// already in progress.
+        /// </summary>
+        private static bool nowProcessing = false;
+
         public delegate void AvatarProcessorCallback(GameObject obj);
 
         /// <summary>
         /// This API is NOT stable. Do not use it yet.
         /// </summary>
-        public static event AvatarProcessorCallback AfterProcessing;
+        internal static event AvatarProcessorCallback AfterProcessing;
 
         static AvatarProcessor()
         {
@@ -106,6 +115,7 @@ namespace nadena.dev.modular_avatar.core.editor
             try
             {
                 ProcessAvatar(avatarGameObject);
+                FixupAnimatorDebugData(avatarGameObject);
                 return true;
             }
             catch (Exception e)
@@ -117,11 +127,19 @@ namespace nadena.dev.modular_avatar.core.editor
 
         public static void ProcessAvatar(GameObject avatarGameObject)
         {
-            BoneDatabase.ResetBones();
-            PathMappings.Clear();
+            if (nowProcessing) return;
 
             try
             {
+                AssetDatabase.StartAssetEditing();
+                nowProcessing = true;
+
+                var vrcAvatarDescriptor = avatarGameObject.GetComponent<VRCAvatarDescriptor>();
+
+                BoneDatabase.ResetBones();
+                PathMappings.Init(vrcAvatarDescriptor.gameObject);
+                ClonedMenuMappings.Clear();
+
                 // Sometimes people like to nest one avatar in another, when transplanting clothing. To avoid issues
                 // with inconsistently determining the avatar root, we'll go ahead and remove the extra sub-avatars
                 // here.
@@ -138,29 +156,45 @@ namespace nadena.dev.modular_avatar.core.editor
                     }
                 }
 
-                new RenameParametersHook().OnPreprocessAvatar(avatarGameObject);
-                new MenuInstallHook().OnPreprocessAvatar(avatarGameObject);
-                new MergeArmatureHook().OnPreprocessAvatar(avatarGameObject);
-                new RetargetMeshes().OnPreprocessAvatar(avatarGameObject);
+                var context = new BuildContext(vrcAvatarDescriptor);
+
+                new RenameParametersHook().OnPreprocessAvatar(avatarGameObject, context);
+                new MergeAnimatorProcessor().OnPreprocessAvatar(avatarGameObject, context);
+                context.AnimationDatabase.Bootstrap(vrcAvatarDescriptor);
+
+                new MenuInstallHook().OnPreprocessAvatar(avatarGameObject, context);
+                new MergeArmatureHook().OnPreprocessAvatar(context, avatarGameObject);
                 new BoneProxyProcessor().OnPreprocessAvatar(avatarGameObject);
-                new VisibleHeadAccessoryProcessor(avatarGameObject.GetComponent<VRCAvatarDescriptor>()).Process();
-                new MergeAnimatorProcessor().OnPreprocessAvatar(avatarGameObject);
-                new BlendshapeSyncAnimationProcessor().OnPreprocessAvatar(avatarGameObject);
+                new VisibleHeadAccessoryProcessor(vrcAvatarDescriptor).Process();
+                new RemapAnimationPass(vrcAvatarDescriptor).Process(context.AnimationDatabase);
+                new BlendshapeSyncAnimationProcessor().OnPreprocessAvatar(avatarGameObject, context);
                 PhysboneBlockerPass.Process(avatarGameObject);
+
+                context.AnimationDatabase.Commit();
 
                 AfterProcessing?.Invoke(avatarGameObject);
             }
             finally
             {
+                AssetDatabase.StopAssetEditing();
+
+                nowProcessing = false;
+
                 // Ensure that we clean up AvatarTagComponents after failed processing. This ensures we don't re-enter
                 // processing from the Awake method on the unprocessed AvatarTagComponents
                 foreach (var component in avatarGameObject.GetComponentsInChildren<AvatarTagComponent>(true))
                 {
                     UnityEngine.Object.DestroyImmediate(component);
                 }
-            }
 
-            FixupAnimatorDebugData(avatarGameObject);
+                var activator = avatarGameObject.GetComponent<AvatarActivator>();
+                if (activator != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(activator);
+                }
+
+                ClonedMenuMappings.Clear();
+            }
         }
 
         [SuppressMessage("ReSharper", "PossibleNullReferenceException")]

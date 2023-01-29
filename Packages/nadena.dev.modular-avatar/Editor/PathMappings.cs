@@ -23,6 +23,9 @@
  */
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 using VRC.SDKBase.Editor.BuildPipeline;
 
@@ -30,43 +33,139 @@ namespace nadena.dev.modular_avatar.core.editor
 {
     internal static class PathMappings
     {
-        private static List<(string, MappingEntry)> Mappings = new List<(string, MappingEntry)>();
+        private static Dictionary<GameObject, List<string>> _objectToOriginalPaths =
+            new Dictionary<GameObject, List<string>>();
 
-        internal struct MappingEntry
+        private static ImmutableDictionary<string, string> _originalPathToMappedPath = null;
+        private static ImmutableDictionary<string, string> _transformOriginalPathToMappedPath = null;
+
+        private static HashSet<GameObject> _transformLookthroughObjects = new HashSet<GameObject>();
+
+        internal static void Init(GameObject root)
         {
-            public string path;
-            public string transformPath;
+            _objectToOriginalPaths.Clear();
+            _originalPathToMappedPath = null;
+            _transformLookthroughObjects.Clear();
 
-            public string Get(bool isTransformMapping)
+            foreach (var xform in root.GetComponentsInChildren<Transform>(true))
             {
-                return isTransformMapping ? transformPath : path;
+                var path = RuntimeUtil.RelativePath(root, xform.gameObject);
+                _objectToOriginalPaths.Add(xform.gameObject, new List<string> {path});
+            }
+
+            ClearCache();
+        }
+
+        internal static void ClearCache()
+        {
+            _originalPathToMappedPath = _transformOriginalPathToMappedPath = null;
+        }
+
+        /// <summary>
+        /// Returns a path identifying a given object. This can include objects not originally present; in this case,
+        /// they will be assigned a randomly-generated internal ID which will be replaced during path remapping with
+        /// the true path.
+        /// </summary>
+        /// <param name="obj">Object to map</param>
+        /// <returns></returns>
+        internal static string GetObjectIdentifier(GameObject obj)
+        {
+            if (_objectToOriginalPaths.TryGetValue(obj, out var paths))
+            {
+                return paths[0];
+            }
+            else
+            {
+                var internalPath = "_ModularAvatarInternal/" + GUID.Generate();
+                _objectToOriginalPaths.Add(obj, new List<string> {internalPath});
+                return internalPath;
             }
         }
 
-        internal static void Clear()
+        /// <summary>
+        /// When animating a transform component on a merged bone, we want to make sure we manipulate the original
+        /// avatar's bone, not a stub bone attached underneath. By making an object as transform lookthrough, any
+        /// queries for mapped paths on the transform component will walk up the tree to the next parent.
+        /// </summary>
+        /// <param name="obj">The object to mark transform lookthrough</param>
+        internal static void MarkTransformLookthrough(GameObject obj)
         {
-            Mappings.Clear();
+            ClearCache();
+            _transformLookthroughObjects.Add(obj);
         }
 
-        internal static void Remap(string from, MappingEntry to)
+        /// <summary>
+        /// Marks an object as having been removed. Its paths will be remapped to its parent. 
+        /// </summary>
+        /// <param name="obj"></param>
+        internal static void MarkRemoved(GameObject obj)
         {
-            Mappings.Add((from, to));
+            ClearCache();
+            if (_objectToOriginalPaths.TryGetValue(obj, out var paths))
+            {
+                var parent = obj.transform.parent.gameObject;
+                if (_objectToOriginalPaths.TryGetValue(parent, out var parentPaths))
+                {
+                    parentPaths.AddRange(paths);
+                }
+
+                _objectToOriginalPaths.Remove(obj);
+                _transformLookthroughObjects.Remove(obj);
+            }
+        }
+
+        private static ImmutableDictionary<string, string> BuildMapping(ref ImmutableDictionary<string, string> cache,
+            bool transformLookup)
+        {
+            if (cache != null) return cache;
+
+            ImmutableDictionary<string, string>.Builder builder = ImmutableDictionary.CreateBuilder<string, string>();
+
+            foreach (var kvp in _objectToOriginalPaths)
+            {
+                var obj = kvp.Key;
+                var paths = kvp.Value;
+
+                if (transformLookup)
+                {
+                    while (_transformLookthroughObjects.Contains(obj))
+                    {
+                        obj = obj.transform.parent.gameObject;
+                    }
+                }
+
+                var newPath = RuntimeUtil.AvatarRootPath(obj);
+                foreach (var origPath in paths)
+                {
+                    builder.Add(origPath, newPath);
+                }
+            }
+
+            cache = builder.ToImmutableDictionary();
+            return cache;
         }
 
         internal static string MapPath(string path, bool isTransformMapping = false)
         {
-            foreach (var (src, mapping) in Mappings)
-            {
-                if (path == src || path.StartsWith(src + "/"))
-                {
-                    var suffix = path.Substring(src.Length);
-                    path = mapping.Get(isTransformMapping) + suffix;
+            ImmutableDictionary<string, string> mappings;
 
-                    // Continue processing subsequent remappings
-                }
+            if (isTransformMapping)
+            {
+                mappings = BuildMapping(ref _originalPathToMappedPath, true);
+            }
+            else
+            {
+                mappings = BuildMapping(ref _transformOriginalPathToMappedPath, false);
             }
 
-            return path;
+            if (mappings.TryGetValue(path, out var mappedPath))
+            {
+                return mappedPath;
+            }
+            else
+            {
+                return path;
+            }
         }
     }
 }
